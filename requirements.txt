@@ -1,0 +1,13 @@
+numpy==2.4.6
+scipy==1.17.1
+networkx==3.6.1
+pandas==3.0.3
+bctpy==0.6.1
+nctpy==1.0.1
+neuromaps==0.0.5
+netneurotools==0.3.0
+nilearn==0.13.1
+lxml
+xlrd
+# ENIGMA Toolbox (GitHub only):
+# pip install "git+https://github.com/MICA-MNI/ENIGMA.git"

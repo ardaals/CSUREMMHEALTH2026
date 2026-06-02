@@ -1,0 +1,22 @@
+# virtual environment
+.venv/
+env/
+
+# raw data — too large and often under data-access agreements
+data/raw/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# OS
+.DS_Store
+Thumbs.db

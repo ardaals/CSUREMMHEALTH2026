@@ -1,0 +1,30 @@
+{
+  "W_dk68.npy": {
+    "description": "68x68 normalized structural connectome (DK-68 atlas)",
+    "source": "Budapest connectome v3 (budapest_83.graphml), subgraph restricted to DK-68 regions, row-normalized",
+    "shape": [68, 68],
+    "dtype": "float64",
+    "produced_by": "scripts/01_build_inputs.py -> levers.data.build_connectome()"
+  },
+  "region_names.npy": {
+    "description": "Ordered list of 68 canonical DK-68 region names matching W_dk68 rows/cols",
+    "source": "Lausanne2008 label file + Budapest graphml node attributes",
+    "shape": [68],
+    "dtype": "U64",
+    "produced_by": "scripts/01_build_inputs.py -> levers.data.build_connectome()"
+  },
+  "atrophy_AD.npy": {
+    "description": "68-vector of regional atrophy for Alzheimer's disease (positive = more atrophy)",
+    "source": "ADNI UCSFFSX cortical thickness, DXSUM diagnosis labels, MMSE scores",
+    "shape": [68],
+    "dtype": "float64",
+    "produced_by": "scripts/01_build_inputs.py -> levers.data.build_atrophy_ad()"
+  },
+  "atrophy_FTD.npy": {
+    "description": "68-vector of regional atrophy for frontotemporal dementia/bvFTD (positive = more atrophy)",
+    "source": "Zenodo 10383493 ftd_bvFTD_tmap.nii.gz, parcellated to DK-68",
+    "shape": [68],
+    "dtype": "float64",
+    "produced_by": "scripts/01_build_inputs.py -> levers.data.build_atrophy_ftd()"
+  }
+}
