@@ -1,7 +1,7 @@
 from parser import parse_graphml, graphml_to_string
 from pathlib import Path
 from util import get_files_in_directory, output_sheet
-from connectome import node_attributes
+from connectome import edge_attributes, node_attributes
 from os import path
 from plot import plot_connectome_3d
 from openpyxl import Workbook
@@ -21,15 +21,20 @@ def init_connectome(source_directory):
 
 def node_info(source_directory, output_directory, output_file_name):
     wb = Workbook()
-    ws = wb.active
-    ws.append(["Node Table", "Node ID", "Node Degree", "Position", "Region", "FreeSurfer Name", "Hemisphere"])
+    ws1 = wb.active
+    ws1.append(["Node Table", "Node ID", "Node Degree", "Position", "Region", "FreeSurfer Name", "Hemisphere", "Connected Nodes"])
+    ws2 = wb.create_sheet("Edge Table")
+    ws2.append(["Source Node ID", "Target Node ID", "Fiber Length Mean", "Fractional Anisotropy Mean", "Number of Fibers"])
     files = get_files_in_directory(source_directory)
     for file in files:
         graph_str = graphml_to_string(path.join(source_directory,file))
         graph = parse_graphml(graph_str)
-        rows = node_attributes(graph)
-        for output in rows:
-            ws.append(output)
+        rows_node = node_attributes(graph)
+        edge_info = edge_attributes(graph)
+        for output in rows_node:
+            ws1.append(output)
+        for output in edge_info:
+            ws2.append(output)
     output_sheet(output_directory, output_file_name, wb)
         
 
