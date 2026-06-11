@@ -20,3 +20,7 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Ignore raw and processed PET data added for local processing
+/data/pet/raw/
+/data/processed/pet/
