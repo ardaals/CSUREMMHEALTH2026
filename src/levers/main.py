@@ -54,7 +54,19 @@ def plot_graph(source_directory):
     for file in files:
         graph_str = graphml_to_string(path.join(source_directory,file))
         graph = parse_graphml(graph_str)
-        plot_connectome_3d(graph)
+        # extract numeric id from filename (before first underscore)
+        brain_id = Path(file).stem.split('_')[0]
+
+        # show plot and allow quitting with 'q' inside the figure window
+        quit_flag = plot_connectome_3d(graph, file_id=brain_id)
+        if quit_flag:
+            break
+
+        # Prompt user in console after the figure closes
+        print(f"Displayed {file}. Press 'q' to quit, or press Enter to continue: ", end='', flush=True)
+        response = input()
+        if response.lower() == 'q':
+            break
 
 
 def criticality_analysis(source_directory, output_directory):
@@ -103,7 +115,7 @@ if __name__ == '__main__':
     #put your code here
 
     pass
-    # plot_graph("./data/dummy")
+    # plot_graph("./data/86node_connectomes")
     # node_info("./data/dummy", "./spreadsheets", "node_info")
     create_connectivity_matrix("./data/dummy", "./data/dummy/connectivity_matrices")
     criticality_analysis(
