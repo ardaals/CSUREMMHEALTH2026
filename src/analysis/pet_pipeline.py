@@ -247,9 +247,12 @@ def run_pipeline(TAU: str, FSX: str, AMY: str, MRG: str, out_dir: str = "process
     dx_bl = mrg_up.set_index('RID')['DX_BL_NORM'] if 'DX_BL_NORM' in mrg_up.columns else pd.Series(index=group['RID'].values)
     dx = mrg_up.set_index('RID')['DX_NORM'] if 'DX_NORM' in mrg_up.columns else pd.Series(index=group['RID'].values)
 
-    # Define early_spectrum
-    early_spectrum = dx_bl.isin(['CN','SMC','EMCI','LMCI','MCI']) if not dx_bl.empty else pd.Series(False, index=group['RID'].values)
-    TAU_CASE = (amy_status == True) & early_spectrum
+    # Define tau case/control: strict Alzheimer's-spectrum
+    # TAU_CASE: amyloid-positive with baseline impairment (EMCI/LMCI/MCI) OR diagnosed Dementia + amyloid+
+    impairment_spectrum = dx_bl.isin(['EMCI','LMCI','MCI'])
+    dementia_status = dx == 'Dementia'
+    TAU_CASE = (amy_status == True) & (impairment_spectrum | dementia_status)
+    # TAU_CTRL: amyloid-negative cognitively normal at baseline
     TAU_CTRL = (amy_status == False) & (dx_bl == 'CN')
     ATR_CASE = dx == 'Dementia'
     ATR_CTRL = dx == 'CN'
@@ -270,7 +273,109 @@ def run_pipeline(TAU: str, FSX: str, AMY: str, MRG: str, out_dir: str = "process
     tau_df.to_csv(tau_out)
     atr_df.to_csv(atr_out)
     print('Wrote', tau_out, atr_out)
+
+    plot_top_regions(tau_df, atr_df, out_dir)
     return tau_df, atr_df
+
+
+def plot_top_regions(tau_df: pd.DataFrame, atr_df: pd.DataFrame, out_dir: str, n: int = 15) -> str:
+    """Generate top-N region bar charts saved to targets_enhanced.png.
+
+    Bars are ordered largest effect size at top (darkest gradient) to smallest
+    at bottom (lightest gradient). The legend is placed below each bar panel
+    so it never overlaps with bars.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+    import matplotlib.lines as mlines
+
+    fig = plt.figure(figsize=(18, 14))
+    fig.suptitle('ADNI Neuroimaging Biomarkers: Tau and Atrophy Targets',
+                 fontsize=14, fontweight='bold', y=0.98)
+
+    ax_tau = fig.add_subplot(2, 2, 1)
+    ax_atr = fig.add_subplot(2, 2, 2)
+    ax_tau_hist = fig.add_subplot(2, 2, 3)
+    ax_atr_hist = fig.add_subplot(2, 2, 4)
+
+    def _bar_panel(ax, df, title, cmap_name):
+        # Top-n by effect size; sort ascending so barh renders largest at top
+        top = df['effect_size'].dropna().nlargest(n).reset_index()
+        top.columns = ['region', 'effect_size']
+        top = top.sort_values('effect_size', ascending=True).reset_index(drop=True)
+        n_bars = len(top)
+
+        # Gradient: index 0 (bottom) → lightest, index n-1 (top) → darkest
+        cmap = cm.get_cmap(cmap_name)
+        colors = [cmap(0.30 + 0.70 * i / max(n_bars - 1, 1)) for i in range(n_bars)]
+
+        bars = ax.barh(range(n_bars), top['effect_size'].values,
+                       color=colors, edgecolor='white', linewidth=0.5)
+        ax.set_yticks(range(n_bars))
+        ax.set_yticklabels(top['region'].values, fontsize=8)
+        ax.set_xlabel("Cohen's d (Effect Size)", fontsize=9)
+        ax.set_title(title, fontsize=10, fontweight='bold')
+
+        # Numeric labels at end of each bar
+        for i, val in enumerate(top['effect_size'].values):
+            ax.text(val + 0.01, i, f'{val:.2f}', va='center', ha='left', fontsize=7)
+
+        # Threshold reference lines
+        ax.axvline(0.2, color='gray', linestyle=':', linewidth=1.2, alpha=0.7)
+        ax.axvline(0.5, color='darkorange', linestyle='--', linewidth=1.2, alpha=0.7)
+        ax.axvline(0.8, color='firebrick', linestyle='--', linewidth=1.2, alpha=0.7)
+
+        # Legend placed BELOW the axes so it never overlaps bars
+        line1 = mlines.Line2D([], [], color='gray', linestyle=':', linewidth=1.5,
+                              label='Small effect (d=0.2)')
+        line2 = mlines.Line2D([], [], color='darkorange', linestyle='--', linewidth=1.5,
+                              label='Medium effect (d=0.5)')
+        line3 = mlines.Line2D([], [], color='firebrick', linestyle='--', linewidth=1.5,
+                              label='Large effect (d=0.8)')
+        ax.legend(handles=[line1, line2, line3],
+                  loc='upper center', bbox_to_anchor=(0.5, -0.08),
+                  ncol=3, fontsize=7.5, framealpha=0.9,
+                  borderpad=0.8, handlelength=2.0)
+
+    _bar_panel(
+        ax_tau, tau_df,
+        "Tau Pathology: Top 15 Regions\n(Amyloid+ Alzheimer's-Spectrum vs Amyloid- CN)",
+        'Oranges',
+    )
+    _bar_panel(
+        ax_atr, atr_df,
+        'Brain Atrophy: Top 15 Regions\n(Dementia vs Cognitively Normal)',
+        'Blues',
+    )
+
+    # Histograms
+    tau_valid = tau_df['effect_size'].dropna()
+    atr_valid = atr_df['effect_size'].dropna()
+
+    ax_tau_hist.hist(tau_valid, bins=20, color='#E87722', edgecolor='white', alpha=0.85)
+    tau_mean = tau_valid.mean()
+    ax_tau_hist.axvline(tau_mean, color='darkred', linestyle='--', linewidth=1.5,
+                        label=f'Tau mean: {tau_mean:.2f}')
+    ax_tau_hist.set_xlabel("Effect Size (Cohen's d)", fontsize=9)
+    ax_tau_hist.set_ylabel('Count (Number of Regions)', fontsize=9)
+    ax_tau_hist.set_title('Tau Effect Size Distribution (All 68 Regions)', fontsize=10, fontweight='bold')
+    ax_tau_hist.legend(fontsize=8)
+
+    ax_atr_hist.hist(atr_valid, bins=20, color='#4878CF', edgecolor='white', alpha=0.85)
+    atr_mean = atr_valid.mean()
+    ax_atr_hist.axvline(atr_mean, color='darkblue', linestyle='--', linewidth=1.5,
+                        label=f'Atrophy mean: {atr_mean:.2f}')
+    ax_atr_hist.set_xlabel("Effect Size (Cohen's d)", fontsize=9)
+    ax_atr_hist.set_ylabel('Count (Number of Regions)', fontsize=9)
+    ax_atr_hist.set_title('Atrophy Effect Size Distribution (All 68 Regions)', fontsize=10, fontweight='bold')
+    ax_atr_hist.legend(fontsize=8)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    out_path = os.path.join(out_dir, 'targets_enhanced.png')
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print('Wrote', out_path)
+    return out_path
 
 
 if __name__ == '__main__':
