@@ -5,6 +5,7 @@ from scipy.integrate import solve_ivp
 from pathlib import Path
 
 
+
 def sigmoid(x, a, theta):
     """
     Wilson-Cowan 1972 shifted sigmoid.
@@ -15,7 +16,66 @@ def sigmoid(x, a, theta):
     return 1.0 / (1.0 + np.exp(z)) - 1.0 / (1.0 + np.exp(a * theta))
 
 
-def wilson_cowan_rhs(t, y, J, params, P=None):
+def make_wc_noise_function(
+    N,
+    T,
+    dt_noise=0.5,
+    noise_var=0.001,
+    seed=None,
+):
+    """
+    Create a precomputed Gaussian noise function for RK45.
+
+    This represents sigma * omega_i(t) for E and I populations.
+
+    Important:
+        We precompute and interpolate the noise so RK45 sees a deterministic
+        time-dependent function. Do not call randn directly inside the RHS.
+    """
+
+    rng = np.random.default_rng(seed)
+
+    noise_times = np.arange(0.0, T + dt_noise, dt_noise)
+
+    noise_e_values = noise_var * rng.normal(
+        loc=0.0,
+        scale=1.0,
+        size=(len(noise_times), N),
+    )
+
+    noise_i_values = noise_var * rng.normal(
+        loc=0.0,
+        scale=1.0,
+        size=(len(noise_times), N),
+    )
+
+    def noise(t):
+        t = float(np.clip(t, noise_times[0], noise_times[-1]))
+
+        idx = np.searchsorted(noise_times, t) - 1
+        idx = np.clip(idx, 0, len(noise_times) - 2)
+
+        t0 = noise_times[idx]
+        t1 = noise_times[idx + 1]
+
+        alpha = (t - t0) / (t1 - t0)
+
+        noise_e_t = (
+            (1.0 - alpha) * noise_e_values[idx, :]
+            + alpha * noise_e_values[idx + 1, :]
+        )
+
+        noise_i_t = (
+            (1.0 - alpha) * noise_i_values[idx, :]
+            + alpha * noise_i_values[idx + 1, :]
+        )
+
+        return noise_e_t, noise_i_t
+
+    return noise
+
+
+def wilson_cowan_rhs(t, y, J, params, P=None, noise=None):
     """
     Noise-free, zero-delay Wilson-Cowan model on a connectome.
 
@@ -78,13 +138,32 @@ def wilson_cowan_rhs(t, y, J, params, P=None):
     S_E = sigmoid(input_E, a=aE, theta=thetaE)
     S_I = sigmoid(input_I, a=aI, theta=thetaI)
 
-    dE = (-E + (SEm - r_e * E) * S_E) / tau
-    dI = (-I + (SIm - r_i * I) * S_I) / tau
+    if noise is None:
+        noise_e_t = np.zeros(N)
+        noise_i_t = np.zeros(N)
+    elif callable(noise):
+        noise_e_t, noise_i_t = noise(t)
+        noise_e_t = np.asarray(noise_e_t)
+        noise_i_t = np.asarray(noise_i_t)
+    else:
+        noise_arr = np.asarray(noise)
+
+        if noise_arr.shape[0] == 2 * N:
+            noise_e_t = noise_arr[:N]
+            noise_i_t = noise_arr[N:]
+        elif noise_arr.shape[0] == N:
+            noise_e_t = noise_arr
+            noise_i_t = noise_arr
+        else:
+            raise ValueError("noise must have length N or 2N.")
+
+    dE = (-E + (SEm - r_e * E) * S_E + noise_e_t) / tau
+    dI = (-I + (SIm - r_i * I) * S_I + noise_i_t) / tau
 
     return np.concatenate([dE, dI])
 
 
-def simulate_wc(J, params, T=300.0, dt=0.5, E0_value=0.1, I0_value=0.1, P=None):
+def simulate_wc(J, params, T=300.0, dt=0.5, E0_value=0.1, I0_value=0.1, P=None, noise=None):
     """
     Simulate Wilson-Cowan dynamics for one value of c5.
     """
@@ -99,11 +178,17 @@ def simulate_wc(J, params, T=300.0, dt=0.5, E0_value=0.1, I0_value=0.1, P=None):
     t_eval = np.arange(0, T + dt, dt)
     # Integrate the system of ODEs
     sol = solve_ivp(
-        fun=wilson_cowan_rhs,
+    fun=lambda t, y: wilson_cowan_rhs(
+        t=t,
+        y=y,
+        J=J,
+        params=params,
+        P=P,
+        noise=noise,
+    ),
         t_span=(0, T),
         y0=y0,
         t_eval=t_eval,
-        args=(J, params, P),
         method="RK45",
         rtol=1e-6,
         atol=1e-8,
@@ -148,6 +233,7 @@ def sweep_c5(
     T=300.0,
     dt=0.5,
     transient_fraction=0.5,
+    set_noise = False
 ):
     """
     Sweep c5 and record regional average excitatory activity.
@@ -165,8 +251,17 @@ def sweep_c5(
         params = base_params.copy()
         params["c5"] = float(c5)
         params["c6"] = float(c6_ratio * c5)
-
-        t, E, I = simulate_wc(J, params, T=T, dt=dt)
+        if set_noise is True:
+            noise = make_wc_noise_function(
+            N=J.shape[0],
+            T=T,
+            dt_noise=dt,
+            noise_var=0.001,
+            seed=42,)
+        else: 
+            noise = None
+        
+        t, E, I = simulate_wc(J, params, T=T, dt=dt, noise=noise)
 
         summary = summarize_activity(
             E,
@@ -202,7 +297,6 @@ def estimate_critical_c5(regional_df):
     Estimate c5* as the c5 value where the regional activity pattern
     has the largest jump.
 
-    This is threshold-free.
     """
 
     c5_values = regional_df["c5"].to_numpy()
@@ -219,9 +313,15 @@ def estimate_critical_c5(regional_df):
     jump_index = int(np.argmax(jump_scores))
     # The estimated critical c5* is the c5 value at the end of the interval with the largest jump.
     c5_star = c5_values[jump_index + 1]
+    # pre-critical point
+    c5_pre = c5_values[jump_index]
+    # The jump size is the magnitude of the change in regional activity patterns at the estimated transition.
     jump_size = jump_scores[jump_index]
 
-    return float(c5_star), float(jump_size)
+
+    
+
+    return float(c5_star), float(jump_size), float(c5_pre)
 
 
 
@@ -254,52 +354,6 @@ def default_wc_params():
     }
 
 
-def plot_criticality(summary_df, regional_df, c5_star, output_path):
-    """
-    Plot regional average activity curves and the estimated transition point.
-    """
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    c5_values = regional_df["c5"].to_numpy()
-    region_cols = [col for col in regional_df.columns if col.startswith("region_")]
-
-    fig, ax1 = plt.subplots(figsize=(9, 5))
-
-    # Plot each region's average excitatory activity as a function of c5
-    for col in region_cols:
-        ax1.plot(
-            c5_values,
-            regional_df[col],
-            linewidth=0.7,
-            alpha=0.35,
-        )
-
-    # Also plot the across-region mean as a thicker line
-    ax1.plot(
-        summary_df["c5"],
-        summary_df["mean_activity"],
-        linewidth=2.0,
-        label="Mean across regions",
-    )
-    # Mark the estimated c5* with a vertical line
-    ax1.axvline(
-        c5_star,
-        linestyle=":",
-        linewidth=2,
-        label=f"Estimated c5* = {c5_star:.4g}",
-    )
-
-    ax1.set_xlabel("Global excitatory coupling c5")
-    ax1.set_ylabel("Regional average excitatory activity")
-    ax1.set_title("Wilson-Cowan transition sweep")
-    ax1.legend(loc="best")
-
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=300)
-    plt.close(fig)
-
 
 def run_criticality_analysis(
     W,
@@ -308,6 +362,8 @@ def run_criticality_analysis(
     c5_min=0.0,
     c5_max=1000.0,
     num_c5=101,
+    spectral_radius = False,
+    set_noise = False
 ):
     """
     Full criticality workflow for one connectome matrix.
@@ -318,7 +374,8 @@ def run_criticality_analysis(
         transition plot
         estimated c5*
     """
-
+    if spectral_radius == True:
+        c5_max = 20
     Path(output_directory).mkdir(parents=True, exist_ok=True)
 
     W = np.asarray(W, dtype=float).copy()
@@ -331,12 +388,13 @@ def run_criticality_analysis(
         c5_values=c5_values,
         base_params=default_wc_params(),
         c6_ratio=0.25,
-        T=300.0,
+        T=150.0,
         dt=0.5,
         transient_fraction=0.5,
+        set_noise = set_noise
     )
 
-    c5_star, jump_size = estimate_critical_c5(regional_df)
+    c5_star, jump_size, c5_pre = estimate_critical_c5(regional_df)
 
     summary_csv_path = Path(output_directory) / f"{output_prefix}_criticality_summary.csv"
     regional_csv_path = Path(output_directory) / f"{output_prefix}_regional_activity.csv"
@@ -349,17 +407,19 @@ def run_criticality_analysis(
     timeseries_paths = plot_timeseries_near_transition(
         W=W,
         c5_star=c5_star,
+        c5_pre = c5_pre,
         output_directory=output_directory,
         output_prefix=output_prefix,
-        below_delta=(c5_max - c5_min) / max(num_c5 - 1, 1),
-        above_delta=(c5_max - c5_min) / max(num_c5 - 1, 1),
-        T=300.0,
+        T=150.0,
         dt=0.5,
+        above_delta=(c5_max - c5_min) / max(num_c5 - 1, 1),
+        spectral_radius = spectral_radius
     )
 
     return {
         "c5_star": c5_star,
         "jump_size": jump_size,
+        "c5_pre": c5_pre,
         "csv_path": str(summary_csv_path),
         "summary_csv_path": str(summary_csv_path),
         "regional_csv_path": str(regional_csv_path),
@@ -371,12 +431,13 @@ def run_criticality_analysis(
 def plot_timeseries_near_transition(
     W,
     c5_star,
+    c5_pre,
     output_directory,
     output_prefix,
-    below_delta=10.0,
-    above_delta=10.0,
     T=300.0,
     dt=0.5,
+    above_delta=10.0,
+    spectral_radius = False
 ):
     """
     Plot E(t) time series below, at, and above the estimated transition.
@@ -384,12 +445,14 @@ def plot_timeseries_near_transition(
     This is useful for verifying that c5* corresponds to a true dynamical
     transition rather than just a plotting artifact.
     """
+    if spectral_radius == True:
+        above_delta = 0.1
 
     output_directory = Path(output_directory)
     output_directory.mkdir(parents=True, exist_ok=True)
 
     c5_values = [
-        max(c5_star - below_delta, 0.0),
+        c5_pre,
         c5_star,
         c5_star + above_delta,
     ]
@@ -436,3 +499,49 @@ def plot_timeseries_near_transition(
         output_paths.append(str(plot_path))
 
     return output_paths
+
+def plot_criticality(summary_df, regional_df, c5_star, output_path):
+    """
+    Plot regional average activity curves and the estimated transition point.
+    """
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    c5_values = regional_df["c5"].to_numpy()
+    region_cols = [col for col in regional_df.columns if col.startswith("region_")]
+
+    fig, ax1 = plt.subplots(figsize=(9, 5))
+
+    # Plot each region's average excitatory activity as a function of c5
+    for col in region_cols:
+        ax1.plot(
+            c5_values,
+            regional_df[col],
+            linewidth=0.7,
+            alpha=0.35,
+        )
+
+    # Also plot the across-region mean as a thicker line
+    ax1.plot(
+        summary_df["c5"],
+        summary_df["mean_activity"],
+        linewidth=2.0,
+        label="Mean across regions",
+    )
+    # Mark the estimated c5* with a vertical line
+    ax1.axvline(
+        c5_star,
+        linestyle=":",
+        linewidth=2,
+        label=f"Estimated c5* = {c5_star:.4g}",
+    )
+
+    ax1.set_xlabel("Global excitatory coupling c5")
+    ax1.set_ylabel("Regional average excitatory activity")
+    ax1.set_title("Wilson-Cowan transition sweep")
+    ax1.legend(loc="best")
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300)
+    plt.close(fig)

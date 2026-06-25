@@ -32,6 +32,15 @@ def node_attributes(graph):
         ])
     return node_info
 
+def edge_validation(graph):
+    node_info = []
+    for node, data in graph.nodes(data=True):
+        node_name = data.get("dn_name")
+        if graph.degree(node) == 0:
+            node_info.append(node_name)
+    full_node_info = ", ".join(node_info)
+    return full_node_info
+
 def edge_attributes(graph):
     """Extract edge attributes from a NetworkX graph."""
     #edge_info[0] = source_node, edge_info[1] = target_node, edge_info[2] = fiber_length_mean,
@@ -51,7 +60,7 @@ def edge_attributes(graph):
     return edge_info
 
 
-def connectivity_matrix(graph, weight_attr="number_of_fibers", zero_diagonal=True):
+def connectivity_matrix(graph, spectral_radius=False, weight_attr="number_of_fibers", zero_diagonal=True):
     """Extract the connectivity matrix from a NetworkX graph."""
     nodes = list(graph.nodes())
 
@@ -75,4 +84,6 @@ def connectivity_matrix(graph, weight_attr="number_of_fibers", zero_diagonal=Tru
     if total == 0:
             raise ValueError("Matrix sum is zero; check edge weights.")
     W = W / total
+    if spectral_radius == True:
+        W = W / np.max(np.abs(np.linalg.eigvals(W)))
     return W, nodes

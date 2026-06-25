@@ -1,9 +1,9 @@
 from os import path, listdir
 from decimal import Decimal
+import shutil
 
 # returns a string with num rounded to 3 decimal places
 # num is intended to be a float
-# this should not be used for PDB file outputs, instead use outfile.py/_format_value
 def float_to_rounded_string(num):
     return str(round(Decimal(num), 3))
 
@@ -11,6 +11,12 @@ def float_to_rounded_string(num):
 # this is not a full path, just the file name
 def get_files_in_directory(directory):
     return [f for f in listdir(directory) if path.isfile(path.join(directory, f))]
+
+# inputs an array of file paths and copies those files to the specified directory
+def copy_files_in_directory(files, output_directory):
+    for file in files:
+        shutil.copy(file, output_directory)    
+
 
 # returns all the folder names in directory
 # this is not a full path, just the subdirectory name
